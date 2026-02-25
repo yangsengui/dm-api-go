@@ -1,0 +1,30 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go test ./...
+      - name: Build source package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $tag = "${{ github.ref_name }}"
+          $pkgDir = "dist/dm-api-go-$tag"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          Copy-Item README.md $pkgDir
+          Copy-Item go.mod $pkgDir
+          Copy-Item *.go $pkgDir
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "dist/dm-api-go-$tag.zip" -Force
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
