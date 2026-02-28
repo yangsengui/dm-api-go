@@ -11,60 +11,91 @@ import (
 
 const (
 	defaultDLLName      = "dm_api.dll"
-	defaultPipeTimeout  = 5000
 	defaultBufferSize   = 256
-	defaultVersionSize  = 32
 	defaultModeBufSize  = 64
 	devLicenseErrorText = "Development license is missing or corrupted. Run `distromate sdk renew` to regenerate the dev certificate."
+
+	envDmAPIPath          = "DM_API_PATH"
+	envDmAppID            = "DM_APP_ID"
+	envDmPublicKey        = "DM_PUBLIC_KEY"
+	envDmLauncherEndpoint = "DM_LAUNCHER_ENDPOINT"
+	envDmLauncherToken    = "DM_LAUNCHER_TOKEN"
 )
+
+const (
+	dmErrOK uint32 = iota
+	dmErrFail
+	dmErrInvalidParameter
+	dmErrAppIDNotSet
+	dmErrLicenseKeyNotSet
+	dmErrNotActivated
+	dmErrLicenseExpired
+	dmErrNetwork
+	dmErrFileIO
+	dmErrSignature
+	dmErrBufferTooSmall
+)
+
+var activationErrorNames = map[uint32]string{
+	dmErrOK:               "DM_ERR_OK",
+	dmErrFail:             "DM_ERR_FAIL",
+	dmErrInvalidParameter: "DM_ERR_INVALID_PARAMETER",
+	dmErrAppIDNotSet:      "DM_ERR_APPID_NOT_SET",
+	dmErrLicenseKeyNotSet: "DM_ERR_LICENSE_KEY_NOT_SET",
+	dmErrNotActivated:     "DM_ERR_NOT_ACTIVATED",
+	dmErrLicenseExpired:   "DM_ERR_LICENSE_EXPIRED",
+	dmErrNetwork:          "DM_ERR_NETWORK",
+	dmErrFileIO:           "DM_ERR_FILE_IO",
+	dmErrSignature:        "DM_ERR_SIGNATURE",
+	dmErrBufferTooSmall:   "DM_ERR_BUFFER_TOO_SMALL",
+}
 
 var (
 	dll      *syscall.DLL
 	loadErr  error
 	loadOnce sync.Once
 
-	procConnect                        *syscall.Proc
-	procClose                          *syscall.Proc
-	procGetVersion                     *syscall.Proc
-	procRestart                        *syscall.Proc
-	procLastError                      *syscall.Proc
-	procCheckForUpdates                *syscall.Proc
-	procDownloadUpdate                 *syscall.Proc
-	procGetUpdateState                 *syscall.Proc
-	procWaitUpdateState                *syscall.Proc
-	procQuitAndInstall                 *syscall.Proc
-	procJsonToCanonical                *syscall.Proc
-	procFreeString                     *syscall.Proc
-	procSetProductData                 *syscall.Proc
-	procSetProductId                   *syscall.Proc
-	procSetDataDirectory               *syscall.Proc
-	procSetDebugMode                   *syscall.Proc
-	procSetCustomDeviceFingerprint     *syscall.Proc
-	procSetLicenseKey                  *syscall.Proc
-	procSetActivationMetadata          *syscall.Proc
-	procActivateLicense                *syscall.Proc
-	procActivateLicenseOffline         *syscall.Proc
-	procGenerateOfflineDeactivationReq *syscall.Proc
-	procGetLastActivationError         *syscall.Proc
-	procIsLicenseGenuine               *syscall.Proc
-	procIsLicenseValid                 *syscall.Proc
-	procGetServerSyncGracePeriodExpiry *syscall.Proc
-	procGetActivationMode              *syscall.Proc
-	procGetLicenseKey                  *syscall.Proc
-	procGetLicenseExpiryDate           *syscall.Proc
-	procGetLicenseCreationDate         *syscall.Proc
-	procGetLicenseActivationDate       *syscall.Proc
-	procGetActivationCreationDate      *syscall.Proc
-	procGetActivationLastSyncedDate    *syscall.Proc
-	procGetActivationId                *syscall.Proc
-	procGetLibraryVersion              *syscall.Proc
-	procReset                          *syscall.Proc
+	procGetVersion                  *syscall.Proc
+	procRestart                     *syscall.Proc
+	procLastError                   *syscall.Proc
+	procCheckForUpdates             *syscall.Proc
+	procDownloadUpdate              *syscall.Proc
+	procCancelUpdateDownload        *syscall.Proc
+	procGetUpdateState              *syscall.Proc
+	procGetPostUpdateInfo           *syscall.Proc
+	procAckPostUpdateInfo           *syscall.Proc
+	procWaitUpdateState             *syscall.Proc
+	procQuitAndInstall              *syscall.Proc
+	procJsonToCanonical             *syscall.Proc
+	procFreeString                  *syscall.Proc
+	procSetProductData              *syscall.Proc
+	procSetProductId                *syscall.Proc
+	procSetDataDirectory            *syscall.Proc
+	procSetDebugMode                *syscall.Proc
+	procSetCustomDeviceFP           *syscall.Proc
+	procSetLicenseKey               *syscall.Proc
+	procSetLicenseCallback          *syscall.Proc
+	procActivateLicense             *syscall.Proc
+	procGetLastActivationError      *syscall.Proc
+	procIsLicenseGenuine            *syscall.Proc
+	procIsLicenseValid              *syscall.Proc
+	procGetServerSyncGrace          *syscall.Proc
+	procGetActivationMode           *syscall.Proc
+	procGetLicenseKey               *syscall.Proc
+	procGetLicenseExpiryDate        *syscall.Proc
+	procGetLicenseCreationDate      *syscall.Proc
+	procGetLicenseActivationDate    *syscall.Proc
+	procGetActivationCreationDate   *syscall.Proc
+	procGetActivationLastSyncedDate *syscall.Proc
+	procGetActivationID             *syscall.Proc
+	procGetLibraryVersion           *syscall.Proc
+	procReset                       *syscall.Proc
 )
 
 func resolveDLLPath(dllPath string) string {
 	resolved := strings.TrimSpace(dllPath)
 	if resolved == "" {
-		resolved = strings.TrimSpace(os.Getenv("DM_API_PATH"))
+		resolved = strings.TrimSpace(os.Getenv(envDmAPIPath))
 	}
 	if resolved == "" {
 		resolved = defaultDLLName
@@ -87,7 +118,7 @@ func resolveDLLPath(dllPath string) string {
 	}
 
 	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
+		if _, statErr := os.Stat(candidate); statErr == nil {
 			return candidate
 		}
 	}
@@ -113,14 +144,15 @@ func ensureDLL(dllPath string) error {
 			return
 		}
 
-		procConnect = findProc("DM_Connect")
-		procClose = findProc("DM_Close")
 		procGetVersion = findProc("DM_GetVersion")
 		procRestart = findProc("DM_RestartAppIfNecessary")
 		procLastError = findProc("DM_GetLastError")
 		procCheckForUpdates = findProc("DM_CheckForUpdates")
 		procDownloadUpdate = findProc("DM_DownloadUpdate")
+		procCancelUpdateDownload = findProc("DM_CancelUpdateDownload")
 		procGetUpdateState = findProc("DM_GetUpdateState")
+		procGetPostUpdateInfo = findProc("DM_GetPostUpdateInfo")
+		procAckPostUpdateInfo = findProc("DM_AckPostUpdateInfo")
 		procWaitUpdateState = findProc("DM_WaitForUpdateStateChange")
 		procQuitAndInstall = findProc("DM_QuitAndInstall")
 		procJsonToCanonical = findProc("DM_JsonToCanonical")
@@ -130,18 +162,16 @@ func ensureDLL(dllPath string) error {
 		procSetProductId = findProc("SetProductId")
 		procSetDataDirectory = findProc("SetDataDirectory")
 		procSetDebugMode = findProc("SetDebugMode")
-		procSetCustomDeviceFingerprint = findProc("SetCustomDeviceFingerprint")
+		procSetCustomDeviceFP = findProc("SetCustomDeviceFingerprint")
 
 		procSetLicenseKey = findProc("SetLicenseKey")
-		procSetActivationMetadata = findProc("SetActivationMetadata")
+		procSetLicenseCallback = findProc("SetLicenseCallback")
 		procActivateLicense = findProc("ActivateLicense")
-		procActivateLicenseOffline = findProc("ActivateLicenseOffline")
-		procGenerateOfflineDeactivationReq = findProc("GenerateOfflineDeactivationRequest")
 		procGetLastActivationError = findProc("GetLastActivationError")
 
 		procIsLicenseGenuine = findProc("IsLicenseGenuine")
 		procIsLicenseValid = findProc("IsLicenseValid")
-		procGetServerSyncGracePeriodExpiry = findProc("GetServerSyncGracePeriodExpiryDate")
+		procGetServerSyncGrace = findProc("GetServerSyncGracePeriodExpiryDate")
 		procGetActivationMode = findProc("GetActivationMode")
 
 		procGetLicenseKey = findProc("GetLicenseKey")
@@ -150,7 +180,7 @@ func ensureDLL(dllPath string) error {
 		procGetLicenseActivationDate = findProc("GetLicenseActivationDate")
 		procGetActivationCreationDate = findProc("GetActivationCreationDate")
 		procGetActivationLastSyncedDate = findProc("GetActivationLastSyncedDate")
-		procGetActivationId = findProc("GetActivationId")
+		procGetActivationID = findProc("GetActivationId")
 
 		procGetLibraryVersion = findProc("GetLibraryVersion")
 		procReset = findProc("Reset")

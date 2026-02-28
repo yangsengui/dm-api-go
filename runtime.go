@@ -5,8 +5,6 @@ import (
 	"unsafe"
 )
 
-// Runtime and launcher methods.
-
 func (api *DmApi) GetVersion() string {
 	ptr, _, _ := procGetVersion.Call()
 	return ptrToStaticString(ptr)
@@ -22,7 +20,6 @@ func (api *DmApi) RestartAppIfNecessary() bool {
 	return int32(ret) != 0
 }
 
-// JsonToCanonical converts JSON string to canonical format (sorted keys).
 func JsonToCanonical(jsonStr string) (string, error) {
 	if err := ensureDLL(""); err != nil {
 		return "", err

@@ -1,17 +1,19 @@
 package dmapi
 
-import "unsafe"
-
-// Activation configuration methods.
+import (
+	"runtime"
+	"syscall"
+	"unsafe"
+)
 
 func (api *DmApi) SetProductData(productData string) bool {
 	value := cStringBytes(productData)
 	return callStatusBool(procSetProductData, uintptr(unsafe.Pointer(&value[0])))
 }
 
-func (api *DmApi) SetProductId(productID string, flags uint32) bool {
+func (api *DmApi) SetProductId(productID string) bool {
 	value := cStringBytes(productID)
-	return callStatusBool(procSetProductId, uintptr(unsafe.Pointer(&value[0])), uintptr(flags))
+	return callStatusBool(procSetProductId, uintptr(unsafe.Pointer(&value[0])))
 }
 
 func (api *DmApi) SetDataDirectory(directoryPath string) bool {
@@ -29,41 +31,38 @@ func (api *DmApi) SetDebugMode(enable bool) bool {
 
 func (api *DmApi) SetCustomDeviceFingerprint(fingerprint string) bool {
 	value := cStringBytes(fingerprint)
-	return callStatusBool(procSetCustomDeviceFingerprint, uintptr(unsafe.Pointer(&value[0])))
+	return callStatusBool(procSetCustomDeviceFP, uintptr(unsafe.Pointer(&value[0])))
 }
-
-// Activation flow methods.
 
 func (api *DmApi) SetLicenseKey(licenseKey string) bool {
 	value := cStringBytes(licenseKey)
 	return callStatusBool(procSetLicenseKey, uintptr(unsafe.Pointer(&value[0])))
 }
 
-func (api *DmApi) SetActivationMetadata(key string, value string) bool {
-	keyBytes := cStringBytes(key)
-	valueBytes := cStringBytes(value)
-	return callStatusBool(
-		procSetActivationMetadata,
-		uintptr(unsafe.Pointer(&keyBytes[0])),
-		uintptr(unsafe.Pointer(&valueBytes[0])),
-	)
+func (api *DmApi) SetLicenseCallback(callback func()) bool {
+	if callback == nil {
+		return false
+	}
+
+	thunk := syscall.NewCallback(func() uintptr {
+		callback()
+		return 0
+	})
+
+	ret, _, _ := procSetLicenseCallback.Call(thunk)
+	if int32(ret) != 0 {
+		return false
+	}
+
+	api.licenseCallbackFn = callback
+	api.licenseCallbackAddr = thunk
+	runtime.KeepAlive(api.licenseCallbackFn)
+	return true
 }
 
 func (api *DmApi) ActivateLicense() bool {
 	return callStatusBool(procActivateLicense)
 }
-
-func (api *DmApi) ActivateLicenseOffline(filePath string) bool {
-	value := cStringBytes(filePath)
-	return callStatusBool(procActivateLicenseOffline, uintptr(unsafe.Pointer(&value[0])))
-}
-
-func (api *DmApi) GenerateOfflineDeactivationRequest(filePath string) bool {
-	value := cStringBytes(filePath)
-	return callStatusBool(procGenerateOfflineDeactivationReq, uintptr(unsafe.Pointer(&value[0])))
-}
-
-// Activation status and info methods.
 
 func (api *DmApi) GetLastActivationError() (uint32, bool) {
 	return callU32Out(procGetLastActivationError)
@@ -78,7 +77,7 @@ func (api *DmApi) IsLicenseValid() bool {
 }
 
 func (api *DmApi) GetServerSyncGracePeriodExpiryDate() (uint32, bool) {
-	return callU32Out(procGetServerSyncGracePeriodExpiry)
+	return callU32Out(procGetServerSyncGrace)
 }
 
 func (api *DmApi) GetActivationMode(bufferSize uint32) (string, string, bool) {
@@ -126,14 +125,12 @@ func (api *DmApi) GetActivationLastSyncedDate() (uint32, bool) {
 }
 
 func (api *DmApi) GetActivationId(bufferSize uint32) (string, bool) {
-	return callStringOut(procGetActivationId, bufferSize)
+	return callStringOut(procGetActivationID, bufferSize)
 }
 
-func (api *DmApi) GetLibraryVersion(bufferSize uint32) (string, bool) {
-	if bufferSize == 0 {
-		bufferSize = defaultVersionSize
-	}
-	return callStringOut(procGetLibraryVersion, bufferSize)
+func (api *DmApi) GetLibraryVersion() string {
+	ptr, _, _ := procGetLibraryVersion.Call()
+	return ptrToStaticString(ptr)
 }
 
 func (api *DmApi) Reset() bool {

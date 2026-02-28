@@ -88,27 +88,24 @@ func callStringOut(proc *syscall.Proc, size uint32) (string, bool) {
 	return cStringFromBuffer(buf), true
 }
 
-func normalizeOptions(options map[string]interface{}) map[string]interface{} {
+func marshalOptionalCJSON(options map[string]interface{}) []byte {
 	if options == nil {
-		return map[string]interface{}{}
+		return nil
 	}
-	return options
-}
-
-func marshalCJSON(options map[string]interface{}) []byte {
-	encoded, _ := json.Marshal(normalizeOptions(options))
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return nil
+	}
 	return append(encoded, 0)
 }
 
-func parseResponseData(raw string) map[string]interface{} {
-	var response map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+func parseEnvelope(raw string) map[string]interface{} {
+	if raw == "" {
 		return nil
 	}
-
-	data, ok := response["data"].(map[string]interface{})
-	if !ok {
+	var envelope map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
 		return nil
 	}
-	return data
+	return envelope
 }
